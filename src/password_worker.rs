@@ -6,7 +6,7 @@ use either::Either;
 use hmac::Hmac;
 use indicatif::ProgressBar;
 use sha1::Sha1;
-use std::io::{BufReader, Cursor, Read};
+use std::io::{self, BufReader, Cursor, Read, Seek};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +14,27 @@ use std::sync::mpsc::SyncSender;
 use std::thread::JoinHandle;
 use std::{fs, thread};
 use zip::ZipArchive;
-use zip::result::ZipError;
+
+fn verify_password<R: Read + Seek>(
+    archive: &mut ZipArchive<R>,
+    file_number: usize,
+    password: &[u8],
+) -> bool {
+    // A wrong password can pass the encryption header check and then fail
+    // while the decompressor is being constructed, with errors other than
+    // InvalidPassword. Reject that candidate just like a read failure.
+    let Ok(mut zip) = archive.by_index_decrypt(file_number, password) else {
+        return false;
+    };
+    if zip.enclosed_name().is_none() {
+        return false;
+    }
+
+    let expected_size = zip.size();
+    // Read through EOF for CRC/AES authentication without allocating the
+    // uncompressed file size or retaining its contents in memory.
+    io::copy(&mut zip, &mut io::sink()).is_ok_and(|read| read == expected_size)
+}
 
 pub fn filter_for_worker_index(
     passwords: impl Iterator<Item = String>,
@@ -22,14 +42,11 @@ pub fn filter_for_worker_index(
     index: usize,
 ) -> impl Iterator<Item = String> {
     if worker_count > 1 {
-        Either::Left(passwords.enumerate().filter_map(move |(i, line)| {
-            //eprintln!("thread:{} index:{} word:{} module:{}, pass:{}", index, i, line, i % worker_count, i % worker_count == index - 1);
-            if i % worker_count == index - 1 {
-                Some(line)
-            } else {
-                None
-            }
-        }))
+        Either::Left(
+            passwords
+                .enumerate()
+                .filter_map(move |(i, line)| (i % worker_count == index - 1).then_some(line)),
+        )
     } else {
         Either::Right(passwords)
     }
@@ -107,7 +124,6 @@ pub fn password_checker(
 
             // zip archive
             let mut archive = ZipArchive::new(reader).expect("Archive validated before-hand");
-            let mut extraction_buffer = Vec::new();
 
             // processing loop
             let mut processed_delta: u64 = 0;
@@ -130,32 +146,11 @@ pub fn password_checker(
                     // This function sometimes accepts wrong password. This is because the ZIP spec only allows us to check for a 1/256 chance that the password is correct.
                     // There are many passwords out there that will also pass the validity checks we are able to perform.
                     // This is a weakness of the ZipCrypto algorithm, due to its fairly primitive approach to cryptography.
-                    match archive.by_index_decrypt(file_number, password_bytes) {
-                        // invalid password
-                        Err(ZipError::InvalidPassword) => (),
-                        // unexpected error - stop worker
-                        Err(e) => panic!("Unexpected error {e:?}"),
-                        // files in well-formed zip file should have a name
-                        Ok(zip) if zip.enclosed_name().is_none() => (),
-                        // potential valid password
-                        Ok(mut zip) => {
-                            // Validate password by reading the zip file to make sure it is not merely a hash collision.
-                            let zip_size = zip.size() as usize;
-                            extraction_buffer.reserve(zip_size);
-                            match zip.read_to_end(&mut extraction_buffer) {
-                                Err(_) => (), // password collision - continue
-                                Ok(data_read) => {
-                                    // if we read all the bytes, we have a match
-                                    if data_read == zip_size {
-                                        // Send password and continue processing while waiting for signal
-                                        send_password_found
-                                            .send(password.clone())
-                                            .expect("Send found password should not fail");
-                                    }
-                                }
-                            }
-                            extraction_buffer.clear();
-                        }
+                    if verify_password(&mut archive, file_number, password_bytes) {
+                        // Send password and continue processing while waiting for signal
+                        send_password_found
+                            .send(password.clone())
+                            .expect("Send found password should not fail");
                     }
                 }
                 processed_delta += 1;
@@ -182,7 +177,111 @@ pub fn password_checker(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{SeekFrom, Write};
     use std::path::PathBuf;
+    use zip::unstable::write::FileOptionsExt;
+    use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn decryption_io_error_rejects_candidate_without_panicking() {
+        struct FailingReader {
+            inner: Cursor<Vec<u8>>,
+            fail: Arc<AtomicBool>,
+        }
+        impl Read for FailingReader {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if self.fail.load(Ordering::Relaxed) {
+                    Err(io::Error::new(io::ErrorKind::InvalidData, "decoder error"))
+                } else {
+                    self.inner.read(buf)
+                }
+            }
+        }
+        impl Seek for FailingReader {
+            fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+                self.inner.seek(pos)
+            }
+        }
+
+        let fail = Arc::new(AtomicBool::new(false));
+        let reader = FailingReader {
+            inner: Cursor::new(fs::read("test-files/2.test.txt.zip").unwrap()),
+            fail: fail.clone(),
+        };
+        let mut archive = ZipArchive::new(reader).unwrap();
+        fail.store(true, Ordering::Relaxed);
+        assert!(!verify_password(&mut archive, 0, b"wrong"));
+        fail.store(false, Ordering::Relaxed);
+        assert!(verify_password(&mut archive, 0, b"ab"));
+    }
+
+    #[test]
+    fn verify_large_encrypted_file_by_streaming() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .with_deprecated_encryption(b"password")
+            .unwrap();
+        writer.start_file("large.txt", options).unwrap();
+        let block = [b'a'; 8192];
+        for _ in 0..2048 {
+            writer.write_all(&block).unwrap();
+        }
+        let data = writer.finish().unwrap().into_inner();
+        let mut archive = ZipArchive::new(Cursor::new(&data)).unwrap();
+        assert!(!verify_password(&mut archive, 0, b"wrong"));
+        assert!(verify_password(&mut archive, 0, b"password"));
+
+        // A huge advertised size must not drive an allocation or bypass the
+        // length check, even when the password and CRC are correct.
+        let mut inflated_size = data;
+        let central = inflated_size
+            .windows(4)
+            .position(|bytes| bytes == b"PK\x01\x02")
+            .unwrap();
+        inflated_size[central + 24..central + 28].copy_from_slice(&(u32::MAX - 1).to_le_bytes());
+        let mut archive = ZipArchive::new(Cursor::new(inflated_size)).unwrap();
+        assert!(!verify_password(&mut archive, 0, b"password"));
+    }
+
+    #[test]
+    fn streaming_verification_checks_crc_at_eof() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default()
+            .with_deprecated_encryption(b"ab")
+            .unwrap();
+        writer.start_file("test.txt", options).unwrap();
+        writer.write_all(b"contents").unwrap();
+        let mut data = writer.finish().unwrap().into_inner();
+        let central = data
+            .windows(4)
+            .position(|bytes| bytes == b"PK\x01\x02")
+            .unwrap();
+        // Preserve the high CRC byte used by ZipCrypto's password check.
+        data[central + 16] ^= 1;
+        let mut archive = ZipArchive::new(Cursor::new(data)).unwrap();
+        assert!(archive.by_index_decrypt(0, b"ab").is_ok());
+        assert!(!verify_password(&mut archive, 0, b"ab"));
+    }
+
+    #[test]
+    fn streaming_verification_checks_aes_authentication() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default().with_aes_encryption(zip::AesMode::Aes256, "ab");
+        writer.start_file("test.txt", options).unwrap();
+        writer.write_all(b"contents").unwrap();
+        let mut data = writer.finish().unwrap().into_inner();
+        let mut archive = ZipArchive::new(Cursor::new(&data)).unwrap();
+        assert!(verify_password(&mut archive, 0, b"ab"));
+        let zip = archive.by_index_decrypt(0, b"ab").unwrap();
+        let authentication_end = (zip.data_start().unwrap() + zip.compressed_size()) as usize;
+        drop(zip);
+        drop(archive);
+        data[authentication_end - 1] ^= 1;
+        let mut archive = ZipArchive::new(Cursor::new(data)).unwrap();
+        assert!(archive.by_index_decrypt(0, b"ab").is_ok());
+        assert!(!verify_password(&mut archive, 0, b"ab"));
+    }
 
     #[test]
     fn filter_passwords_one_worker() {

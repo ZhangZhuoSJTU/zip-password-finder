@@ -8,14 +8,8 @@ pub fn password_reader_count(file_path: PathBuf) -> Result<usize, std::io::Error
     let mut reader = BufReader::new(file);
     let mut total_password_count = 0;
     let mut line_buffer = Vec::new();
-    loop {
-        // count line number without reallocating each line
-        // read_until to avoid UTF-8 validation (unlike read_line which produce a String)
-        let res = reader.read_until(b'\n', &mut line_buffer)?;
-        if res == 0 {
-            // end of file
-            break;
-        }
+    // Count lines without UTF-8 validation, reusing the buffer for each line.
+    while reader.read_until(b'\n', &mut line_buffer)? != 0 {
         line_buffer.clear();
         total_password_count += 1;
     }

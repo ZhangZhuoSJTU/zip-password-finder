@@ -54,10 +54,17 @@ pub fn validate_zip(file_path: &Path, file_number: usize) -> Result<ValidatedZip
             z.name()
         ))),
         Err(UnsupportedArchive("Password required to decrypt file")) => {
+            // fixed bug where code would panic if reading aes metadata failed
             let aes_info =
-                if let Some(aes_zip_info) = aes_data.expect("Archive validated before-hand") {
+                if let Some(aes_zip_info) = aes_data? {
                     let aes_key_length = aes_zip_info.aes_mode.key_length();
                     let verification_value = aes_zip_info.verification_value;
+                    // if first two bytes are zero the file is invalid
+                    assert_ne!(
+                        verification_value,
+                        [0, 0],
+                        "AES verification bytes must not both be zero"
+                    );
                     let salt = aes_zip_info.salt;
                     Some(AesInfo::new(aes_key_length, verification_value, salt))
                 } else {
