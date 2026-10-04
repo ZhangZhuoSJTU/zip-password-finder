@@ -94,15 +94,3 @@ fn main_result() -> Result<(), FinderError> {
     }
     Ok(())
 }
-
-/*
-    if (true) {
-            // Create a null raw pointer of type *const i32
-    let ptr: *const i32 = std::ptr::null();
-
-    // Unsafe block is required to dereference a raw pointer in Rust
-    unsafe {
-        // Attempting to read from address 0 causes a segmentation fault
-        println!("{}", *ptr);
-    }
-    }*/
