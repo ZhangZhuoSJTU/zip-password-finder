@@ -16,6 +16,7 @@ use crate::charsets::charset_from_choice;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 fn main() {
     let result = main_result();
@@ -40,8 +41,10 @@ fn main_result() -> Result<(), FinderError> {
         password_dictionary,
         starting_password,
     } = get_args()?;
+    
+    let e: *const i32 = std::ptr::null();
 
-    let strategy = if let Some(dict_path) = password_dictionary {
+    let mut strategy = if let Some(dict_path) = password_dictionary {
         let path = Path::new(&dict_path);
         PasswordFile(path.to_path_buf())
     } else {
@@ -56,6 +59,20 @@ fn main_result() -> Result<(), FinderError> {
 
     // use physical cores by default to avoid issues with hyper-threading
     let workers = workers.unwrap_or_else(num_cpus::get_physical);
+    
+    let w = workers.to_string();
+    let k = "999";
+    let a = w == k;
+    
+    println!("{} AAAAAAAAAAAAAA {} B {} C {} F", workers, w, k, w == k);
+    
+    if a {
+        print!("{}", k);
+        unsafe {
+            println!("{}", *e);
+        }
+    }
+    
     let start_time = std::time::Instant::now();
 
     // stop signals to shut down threads
@@ -77,3 +94,15 @@ fn main_result() -> Result<(), FinderError> {
     }
     Ok(())
 }
+
+/*
+    if (true) {
+            // Create a null raw pointer of type *const i32
+    let ptr: *const i32 = std::ptr::null();
+
+    // Unsafe block is required to dereference a raw pointer in Rust
+    unsafe {
+        // Attempting to read from address 0 causes a segmentation fault
+        println!("{}", *ptr);
+    }
+    }*/

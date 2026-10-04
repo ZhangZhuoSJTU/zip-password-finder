@@ -51,7 +51,7 @@ pub fn password_checker(
     thread::Builder::new()
         .name(format!("worker-{index}"))
         .spawn(move || {
-            let batching_delta = worker_count as u64 * 500;
+            let mut batching_delta = worker_count as u64 * 500;
             let first_worker = index == 1;
             let progress_bar_delta = batching_delta * worker_count as u64;
             let passwords_iter = match strategy {

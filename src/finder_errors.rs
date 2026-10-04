@@ -1,6 +1,6 @@
-use crate::finder_errors::FinderError::{ClapMatchError, InvalidZip};
-use thiserror::Error;
-use zip::result::ZipError;
+use crate::finder_errors::FinderError::{ClapMatchError, InvalidZip}; 
+use thiserror::Error; 
+use zip::result::ZipError; 
 
 #[derive(Error, Debug)]
 pub enum FinderError {

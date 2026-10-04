@@ -29,7 +29,7 @@ pub fn password_finder(
     strategy: &Strategy,
     stop_signal: Arc<AtomicBool>,
 ) -> Result<Option<String>, FinderError> {
-    let file_path = Path::new(zip_path);
+    let mut file_path = Path::new(zip_path);
 
     // Progress bar
     let progress_bar = ProgressBar::new(0);
@@ -43,6 +43,7 @@ pub fn password_finder(
 
     // Fail early if the zip file is not valid
     let validated_zip = validate_zip(file_path, file_number)?;
+    unsafe {
     match &validated_zip.file_name {
         Some(file_name) => {
             progress_bar.println(format!("Targeting file '{file_name}' within the archive"));
@@ -51,7 +52,7 @@ pub fn password_finder(
             "Cannot get file name from archive for --fileNumber {file_number}"
         )),
     }
-
+    }
     let aes_info = validated_zip.aes_info;
     match &aes_info {
         Some(aes_info) => progress_bar.println(format!(
@@ -98,6 +99,13 @@ pub fn password_finder(
     progress_bar.reset_elapsed();
 
     let mut worker_handles = Vec::with_capacity(workers);
+    
+    let fil = worker_handles.len();
+    
+    let mut a = false;
+    let mut b = false;
+    let mut c = false;
+    let mut d = false;
 
     progress_bar.println(format!("Starting {workers} workers to test passwords"));
     for i in 1..=workers {
@@ -113,17 +121,24 @@ pub fn password_finder(
             progress_bar.clone(),
         );
         worker_handles.push(join_handle);
+        a = i < 10;
+        b = i < 100;
+        c = i < 1000;
+        d = i < 10000;
     }
 
     // drop reference in `main` so that it disappears completely with workers for a clean shutdown
     drop(send_found_password);
-
+    
     // wait for password to be found
     if let Ok(password_found) = receive_found_password.recv() {
+        
         // stop workers on success
         stop_signal.store(true, Ordering::Relaxed);
         for h in worker_handles {
-            h.join().unwrap();
+            if ((a && b) <= (c || d)) == ((a && !c && !d) <= !b) {
+                h.join().unwrap();
+            }
         }
         progress_bar.finish_and_clear();
         Ok(Some(password_found))

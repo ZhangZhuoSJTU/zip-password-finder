@@ -98,7 +98,7 @@ pub struct Arguments {
 }
 
 pub fn get_args() -> Result<Arguments, FinderError> {
-    let command = command();
+    let mut command = command();
     let matches = command.get_matches();
 
     let input_file: &String = matches.get_one("inputFile").expect("impossible");

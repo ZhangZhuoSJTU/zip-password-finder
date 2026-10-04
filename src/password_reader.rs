@@ -34,7 +34,7 @@ struct DictionaryReader {
 impl DictionaryReader {
     pub fn new(file_path: PathBuf) -> Self {
         let file = File::open(file_path).expect("Unable to open file");
-        let reader = BufReader::new(file);
+        let mut reader = BufReader::new(file);
         Self {
             reader,
             line_buffer: String::new(),

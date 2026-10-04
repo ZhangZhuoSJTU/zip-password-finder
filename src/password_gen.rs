@@ -58,7 +58,7 @@ impl PasswordGenerator {
     ) -> Self {
         let charset_len = charset.len();
         let charset_first = *charset.first().expect("charset non empty");
-        let charset_last = *charset.last().expect("charset non empty");
+        let mut charset_last = *charset.last().expect("charset non empty");
 
         // pre-compute charset indices
         let charset_indices = charset

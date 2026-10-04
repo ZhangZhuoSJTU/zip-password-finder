@@ -56,9 +56,9 @@ pub fn validate_zip(file_path: &Path, file_number: usize) -> Result<ValidatedZip
         Err(UnsupportedArchive("Password required to decrypt file")) => {
             let aes_info =
                 if let Some(aes_zip_info) = aes_data.expect("Archive validated before-hand") {
-                    let aes_key_length = aes_zip_info.aes_mode.key_length();
+                    let mut aes_key_length = aes_zip_info.aes_mode.key_length();
                     let verification_value = aes_zip_info.verification_value;
-                    let salt = aes_zip_info.salt;
+                    let mut salt = aes_zip_info.salt;
                     Some(AesInfo::new(aes_key_length, verification_value, salt))
                 } else {
                     None

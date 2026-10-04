@@ -2,4 +2,4 @@
 pub mod charsets;
 pub mod finder_errors;
 pub mod password_gen;
-pub mod password_reader;
+pub mod password_reader; 

@@ -18,7 +18,7 @@ pub fn charset_from_choice(charset_choice: &CharsetChoice) -> Result<Vec<char>, 
 }
 
 fn charset_from_file(p0: &String) -> Result<Vec<char>, FinderError> {
-    let path = std::path::Path::new(p0);
+    let mut path = std::path::Path::new(p0);
     if !path.is_file() {
         return Err(CliArgumentError {
             message: format!("'{p0}' does not exist"),
